@@ -53,6 +53,11 @@ body.leger .logo-or .or{animation:none;background-position:45% 0}
    Automatique quand la page est ouverte par GMod (steamid dans l'adresse ou GameDetails) ; forcable #gmod, #fluide l'interdit. */
 body.gmod #diapo .plan{transition:opacity 1.5s ease;transform:none!important;will-change:opacity}
 body.gmod #braises,body.gmod #nuit{display:none}
+/* Les premières secondes sont souvent les plus chargées côté GMod : le jeu monte encore ses addons.
+   On laisse la carte se révéler, mais on évite les couches décoratives et le rendu de particules
+   jusqu'à ce que le décodage des premières images soit terminé. */
+body.demarrage #braises,body.demarrage #nuit,body.demarrage .rayons,body.demarrage .brume,body.demarrage #grain{display:none}
+body.demarrage #diapo{filter:none}
 /* volume : haut-parleur + curseur, discret en haut a gauche, memorise d'une connexion a l'autre */
 #volume{position:fixed;top:2.6vh;left:2.4vw;z-index:30;display:flex;align-items:center;gap:.7vw;opacity:0;transition:opacity 1.2s ease 1.5s}
 body.parti #volume{opacity:.55}
@@ -888,7 +893,7 @@ var PL2 = C.plans2 || [], partie2 = false, finMusique2 = 0;
 function prechargerP(L, k){ for (var j = k; j < Math.min(L.length, k + 2); j++) { if (L[j].img) continue; var i = new Image(); i.src = L[j].src; if (i.decode) i.decode().catch(function(){}); L[j].img = i; } }
 var finMusique = 0, PL = C.plans || [], iPl = -1, coucheP = 0, animP = null, dernierT = 0, departBA = 0, eclatFait = -1;
 var garde = [];   // images decodees gardees en memoire : pas de decodage au moment de la coupe
-prechargerP(PL, 0); prechargerP(PL, 2);
+prechargerP(PL, 0);
 // mouvement de chaque plan : echelle et glissement (en %) du debut a la fin
 var MOUV = {
   avance: { s: [1.0, 1.11], x: [0, 0], y: [0, 0], nom: 'avance' },
@@ -1058,6 +1063,11 @@ function suivreSeq(){
 
 function demarrer(){
   D.body.classList.add('parti');
+  D.body.classList.add('demarrage');
+  setTimeout(function(){
+    D.body.classList.remove('demarrage');
+    prechargerP(PL, 2);
+  }, 4500);
   E.debut = Date.now();
   conseilSuivant();
   if (!PL.length) { diapoSuivante(); setInterval(diapoSuivante, 8500); }
@@ -1069,15 +1079,17 @@ function demarrer(){
     var now = Date.now(), tn = performance.now();
     if (dernierImage) mesurer(tn - dernierImage);
     dernierImage = tn;
-    // mode leger : ce qui redessine l'ecran (carte, plans, braises) ne bouge qu'une image sur deux (30 i/s)
-    var pas = !leger || tn - dernierLeger >= 30;
+    // Au lancement, la carte est plafonnee a ~15 i/s pour laisser le CEF decoder les images
+    // et le jeu monter ses addons sans accumuler de travail de rendu.
+    var enDemarrage = D.body.classList.contains('demarrage');
+    var pas = enDemarrage ? tn - dernierLeger >= 66 : (!leger || tn - dernierLeger >= 30);
     if (pas) dernierLeger = tn;
-    lirePulse();
+    if (!D.body.classList.contains('demarrage')) lirePulse();
     // la variable globale force un recalcul de style de toute la page : seulement hors bande-annonce
-    if (C.variante !== 'b') R.style.setProperty('--pulse', pulse.toFixed(3));
-    suivreSeq(); suivreActu(); if (pas) suivreCarte(); suivreBA();
-    if (pas) { poserPlan(); if (!modeGMod) dessiner(); }
-    nuit(now);
+    if (C.variante !== 'b' && !D.body.classList.contains('demarrage')) R.style.setProperty('--pulse', pulse.toFixed(3));
+    suivreSeq(); if (!D.body.classList.contains('demarrage')) suivreActu(); if (pas) suivreCarte(); suivreBA();
+    if (pas && !modeGMod && !D.body.classList.contains('demarrage')) dessiner();
+    if (!D.body.classList.contains('demarrage')) nuit(now);
     requestAnimationFrame(boucle);
   })();
   scenario(C.variante || 'a');
