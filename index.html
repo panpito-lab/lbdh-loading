@@ -46,6 +46,12 @@ body.v-b #diapo .plan{transform:translateZ(0);backface-visibility:hidden}
 /* mode leger (navigateur sans carte graphique trop lent, ex. le CEF de GMod) : le balayage dore du logo se repeint a
    chaque image, fige ; le mouvement des photos, la carte et les braises passent a 30 images/s (voir passerLeger) */
 body.leger .logo-or .or{animation:none;background-position:45% 0}
+/* mode GMod (CEF sans carte graphique ET le jeu qui charge sur le meme processeur) : les photos bougent encore, mais en
+   GLISSEMENT PUR par pixels entiers (une copie de la couche, pas de recalcul de chaque pixel comme pour un zoom). Pour
+   pouvoir glisser, chaque plan deborde de 5 % de l'ecran. Pas de braises (toile plein ecran redessinee en continu).
+   Automatique quand la page est ouverte par GMod (steamid dans l'adresse ou GameDetails) ; forcable #gmod, #fluide l'interdit. */
+body.gmod #diapo .plan{top:-5%;left:-5%;right:-5%;bottom:-5%}
+body.gmod #braises,body.gmod #nuit{display:none}
 /* volume : haut-parleur + curseur, discret en haut a gauche, memorise d'une connexion a l'autre */
 #volume{position:fixed;top:2.6vh;left:2.4vw;z-index:30;display:flex;align-items:center;gap:.7vw;opacity:0;transition:opacity 1.2s ease 1.5s}
 body.parti #volume{opacity:.55}
@@ -422,6 +428,7 @@ window.GameDetails = function(servername, serverurl, mapname, maxplayers, steami
   if (maxplayers) E.max = maxplayers;
   var v = parseFloat(volume);
   if (!isNaN(v) && v >= 0) { volBase = Math.min(1, v); appliquerVolumes(); }
+  passerGMod('GameDetails');
 };
 window.SetFilesTotal = function(t){ E.total = +t || 0; };
 window.SetFilesNeeded = function(n){
@@ -883,14 +890,22 @@ var garde = [];   // images decodees gardees en memoire : pas de decodage au mom
 prechargerP(PL, 0); prechargerP(PL, 2);
 // mouvement de chaque plan : echelle et glissement (en %) du debut a la fin
 var MOUV = {
-  avance: { s: [1.0, 1.11], x: [0, 0], y: [0, 0] },
-  recule: { s: [1.11, 1.0], x: [0, 0], y: [0, 0] },
-  glisse: { s: [1.08, 1.08], x: [2.3, -2.3], y: [0, 0] },
-  monte:  { s: [1.08, 1.08], x: [0, 0], y: [2.2, -2.2] }
+  avance: { s: [1.0, 1.11], x: [0, 0], y: [0, 0], nom: 'avance' },
+  recule: { s: [1.11, 1.0], x: [0, 0], y: [0, 0], nom: 'recule' },
+  glisse: { s: [1.08, 1.08], x: [2.3, -2.3], y: [0, 0], nom: 'glisse' },
+  monte:  { s: [1.08, 1.08], x: [0, 0], y: [2.2, -2.2], nom: 'monte' }
+};
+// mode GMod : glissements purs (% de l'ecran, max 5 = le debord du plan), arrondis au pixel ; les zooms deviennent des travelings en diagonale
+var MOUV_G = {
+  avance: { s: [1, 1], x: [2.4, -2.4], y: [1.6, -1.6], px: true, nom: 'avance' },
+  recule: { s: [1, 1], x: [-2.4, 2.4], y: [-1.6, 1.6], px: true, nom: 'recule' },
+  glisse: { s: [1, 1], x: [3.6, -3.6], y: [0, 0], px: true, nom: 'glisse' },
+  monte:  { s: [1, 1], x: [0, 0], y: [3.2, -3.2], px: true, nom: 'monte' }
 };
 function transfo(m, k){
   k = Math.max(0, Math.min(1, k)); var e = k * k * (3 - 2 * k);   // entree et sortie en douceur
   var s = m.s[0] + (m.s[1] - m.s[0]) * e, x = m.x[0] + (m.x[1] - m.x[0]) * e, y = m.y[0] + (m.y[1] - m.y[0]) * e;
+  if (m.px) return 'translate(' + Math.round(x * innerWidth / 100) + 'px,' + Math.round(y * innerHeight / 100) + 'px)';
   return 'scale(' + s.toFixed(4) + ') translate(' + x.toFixed(3) + '%,' + y.toFixed(3) + '%)';
 }
 var mouvP = null;   // plan en cours : { m, duree (ms), el, t (ms depuis la coupe) } ; en mode leger, pose par poserPlan()
@@ -903,6 +918,16 @@ function poserPlan(){ if (mouvP && !animP) mouvP.el.style.transform = transfo(mo
 // Forcable : #leger / ?leger (ou #fluide pour l'interdire) ; #fps affiche la mesure.
 var leger = false, mesures = [], mauvais = 0, dernierImage = 0, dernierLeger = 0, derniereMed = 0, elFps = D.getElementById('fps');
 var forceLeger = /leger/.test(location.hash + location.search), forceFluide = /fluide/.test(location.hash + location.search);
+var modeGMod = false, forceGMod = /gmod/.test(location.hash + location.search);
+// ouverte par GMod : sv_loadingurl remplace %s par le SteamID64 du joueur
+var enGMod = /[?&]steamid=\d{6,}/.test(location.search);
+function passerGMod(raison){
+  if (modeGMod || forceFluide) return;
+  passerLeger(raison); modeGMod = true;
+  D.body.classList.add('gmod');
+  if (mouvP) { mouvP.m = MOUV_G[mouvP.m.nom] || MOUV_G.avance; poserPlan(); }
+  try { console.log('LBDH : mode GMod (' + raison + ')'); } catch (e) {}
+}
 if (/fps/.test(location.hash + location.search)) elFps.classList.add('on');
 function passerLeger(raison){
   if (leger) return; leger = true;
@@ -917,7 +942,7 @@ function mesurer(dt){
   mesures.push(dt);
   if (mesures.length < 90) return;
   mesures.sort(function(a, b){ return a - b; }); derniereMed = mesures[45]; mesures = [];
-  if (elFps.classList.contains('on')) elFps.textContent = derniereMed.toFixed(1) + ' ms/image · ' + (1000 / derniereMed).toFixed(0) + ' i/s · ' + (leger ? 'léger' : 'normal');
+  if (elFps.classList.contains('on')) elFps.textContent = derniereMed.toFixed(1) + ' ms/image · ' + (1000 / derniereMed).toFixed(0) + ' i/s · ' + (modeGMod ? 'GMod' : leger ? 'léger' : 'normal');
   if (leger || forceFluide) return;
   // deux fenetres de suite (3 s) sous 42 i/s : on passe en leger, sans retour (pas d'oscillation)
   mauvais = derniereMed > 24 ? mauvais + 1 : 0;
@@ -938,8 +963,8 @@ function montrerPlan(k, duree, liste){
   el.style.backgroundImage = 'url("' + p.src + '")';
   el.className = 'plan actif'; autre.classList.remove('actif');
   if (animP) animP.cancel();
-  var m = MOUV[p.mouv] || MOUV.avance;
-  if (p.mouv === 'glisse' && k % 2) m = { s: m.s, x: m.x.slice().reverse(), y: m.y };
+  var TM = modeGMod ? MOUV_G : MOUV, m = TM[p.mouv] || TM.avance;
+  if (p.mouv === 'glisse' && k % 2) m = { s: m.s, x: m.x.slice().reverse(), y: m.y, px: m.px, nom: m.nom };
   mouvP = { m: m, duree: (duree || p.duree) * 1000, el: el, t: 0 };
   if (leger || !el.animate) { animP = null; el.style.transform = transfo(m, 0); }
   else { el.style.transform = ''; animP = el.animate([{ transform: transfo(m, 0) }, { transform: transfo(m, 1) }], { duration: mouvP.duree, fill: 'both', easing: 'ease-in-out' }); }
@@ -1035,6 +1060,7 @@ function demarrer(){
   setInterval(conseilSuivant, 9000);
   setInterval(tic, 100);
   if (forceLeger) passerLeger('forcé');
+  if (forceGMod) passerGMod('forcé'); else if (enGMod) passerGMod('steamid');
   (function boucle(){
     var now = Date.now(), tn = performance.now();
     if (dernierImage) mesurer(tn - dernierImage);
@@ -1046,7 +1072,7 @@ function demarrer(){
     // la variable globale force un recalcul de style de toute la page : seulement hors bande-annonce
     if (C.variante !== 'b') R.style.setProperty('--pulse', pulse.toFixed(3));
     suivreSeq(); suivreActu(); if (pas) suivreCarte(); suivreBA();
-    if (pas) { poserPlan(); dessiner(); }
+    if (pas) { poserPlan(); if (!modeGMod) dessiner(); }
     nuit(now);
     requestAnimationFrame(boucle);
   })();
@@ -1056,7 +1082,7 @@ function demarrer(){
 
 window.LBDH = { scenario: scenario, choisirMusique: choisirMusique, lancerSon: lancerSon, musique: musique, musique2: musique2, ambiance: ambiance,
   ambianceActive: function(on){ C.avecAmbiance = on; fondu(ambiance, 'a', on ? MIX.ambiance * gain() : 0, 1500); if (on && ambiance.paused) ambiance.play(); },
-  etat: E, demarrer: demarrer, config: C, passerLeger: passerLeger, cadence: function(){ return { leger: leger, mediane: derniereMed }; } };
+  etat: E, demarrer: demarrer, config: C, passerLeger: passerLeger, passerGMod: passerGMod, cadence: function(){ return { leger: leger, mediane: derniereMed }; } };
 var mh = location.hash.match(/v=([abc])/); if (mh) C.variante = mh[1];
 var mo = location.hash.match(/o=(actu|carte|cartes)/); if (mo) C.ouverture = mo[1];
 if (!C.ebauche) demarrer();
