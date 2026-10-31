@@ -46,11 +46,12 @@ body.v-b #diapo .plan{transform:translateZ(0);backface-visibility:hidden}
 /* mode leger (navigateur sans carte graphique trop lent, ex. le CEF de GMod) : le balayage dore du logo se repeint a
    chaque image, fige ; le mouvement des photos, la carte et les braises passent a 30 images/s (voir passerLeger) */
 body.leger .logo-or .or{animation:none;background-position:45% 0}
-/* mode GMod (CEF sans carte graphique ET le jeu qui charge sur le meme processeur) : les photos bougent encore, mais en
-   GLISSEMENT PUR par pixels entiers (une copie de la couche, pas de recalcul de chaque pixel comme pour un zoom). Pour
-   pouvoir glisser, chaque plan deborde de 5 % de l'ecran. Pas de braises (toile plein ecran redessinee en continu).
+/* mode GMod : pendant le chargement, le jeu ne rafraichit l'ecran qu'entre deux etapes (montage d'un addon, precache,
+   Lua) ; tout mouvement continu (zoom, traveling) revele ces a-coups. Ici les photos ne bougent plus : elles se FONDENT
+   lentement l'une dans l'autre (le nouveau plan arrive par-dessus l'ancien, qui reste plein), un gel au milieu d'un
+   fondu ne se voit pas. Pas de braises (toile plein ecran redessinee en continu).
    Automatique quand la page est ouverte par GMod (steamid dans l'adresse ou GameDetails) ; forcable #gmod, #fluide l'interdit. */
-body.gmod #diapo .plan{top:-5%;left:-5%;right:-5%;bottom:-5%}
+body.gmod #diapo .plan{transition:opacity 1.5s ease;transform:none!important;will-change:opacity}
 body.gmod #braises,body.gmod #nuit{display:none}
 /* volume : haut-parleur + curseur, discret en haut a gauche, memorise d'une connexion a l'autre */
 #volume{position:fixed;top:2.6vh;left:2.4vw;z-index:30;display:flex;align-items:center;gap:.7vw;opacity:0;transition:opacity 1.2s ease 1.5s}
@@ -895,17 +896,9 @@ var MOUV = {
   glisse: { s: [1.08, 1.08], x: [2.3, -2.3], y: [0, 0], nom: 'glisse' },
   monte:  { s: [1.08, 1.08], x: [0, 0], y: [2.2, -2.2], nom: 'monte' }
 };
-// mode GMod : glissements purs (% de l'ecran, max 5 = le debord du plan), arrondis au pixel ; les zooms deviennent des travelings en diagonale
-var MOUV_G = {
-  avance: { s: [1, 1], x: [2.4, -2.4], y: [1.6, -1.6], px: true, nom: 'avance' },
-  recule: { s: [1, 1], x: [-2.4, 2.4], y: [-1.6, 1.6], px: true, nom: 'recule' },
-  glisse: { s: [1, 1], x: [3.6, -3.6], y: [0, 0], px: true, nom: 'glisse' },
-  monte:  { s: [1, 1], x: [0, 0], y: [3.2, -3.2], px: true, nom: 'monte' }
-};
 function transfo(m, k){
   k = Math.max(0, Math.min(1, k)); var e = k * k * (3 - 2 * k);   // entree et sortie en douceur
   var s = m.s[0] + (m.s[1] - m.s[0]) * e, x = m.x[0] + (m.x[1] - m.x[0]) * e, y = m.y[0] + (m.y[1] - m.y[0]) * e;
-  if (m.px) return 'translate(' + Math.round(x * innerWidth / 100) + 'px,' + Math.round(y * innerHeight / 100) + 'px)';
   return 'scale(' + s.toFixed(4) + ') translate(' + x.toFixed(3) + '%,' + y.toFixed(3) + '%)';
 }
 var mouvP = null;   // plan en cours : { m, duree (ms), el, t (ms depuis la coupe) } ; en mode leger, pose par poserPlan()
@@ -925,7 +918,8 @@ function passerGMod(raison){
   if (modeGMod || forceFluide) return;
   passerLeger(raison); modeGMod = true;
   D.body.classList.add('gmod');
-  if (mouvP) { mouvP.m = MOUV_G[mouvP.m.nom] || MOUV_G.avance; poserPlan(); }
+  if (animP) { animP.cancel(); animP = null; }
+  if (mouvP) { mouvP.el.style.transform = ''; mouvP = null; }
   try { console.log('LBDH : mode GMod (' + raison + ')'); } catch (e) {}
 }
 if (/fps/.test(location.hash + location.search)) elFps.classList.add('on');
@@ -963,8 +957,18 @@ function montrerPlan(k, duree, liste){
   el.style.backgroundImage = 'url("' + p.src + '")';
   el.className = 'plan actif'; autre.classList.remove('actif');
   if (animP) animP.cancel();
-  var TM = modeGMod ? MOUV_G : MOUV, m = TM[p.mouv] || TM.avance;
-  if (p.mouv === 'glisse' && k % 2) m = { s: m.s, x: m.x.slice().reverse(), y: m.y, px: m.px, nom: m.nom };
+  if (modeGMod) {
+    // fondu enchaine : le nouveau plan (dessus) part de 0 et monte a 1, l'ancien reste plein dessous jusqu'a la coupe suivante
+    var d = (duree || p.duree) * 1000, fd = (iPl < 0 || iPl >= 1000 && k === 0) ? 350 : Math.min(1500, Math.max(400, d * .45));
+    el.style.transition = 'none'; el.style.opacity = '0'; el.style.zIndex = '2'; el.style.transform = '';
+    autre.style.zIndex = '1'; autre.style.opacity = '1'; autre.className = 'plan actif';
+    void el.offsetWidth;
+    el.style.transition = ''; el.style.transitionDuration = fd + 'ms'; el.style.opacity = '1';
+    animP = null; mouvP = null; coucheP = 1 - coucheP; iPl = k;
+    return;
+  }
+  var m = MOUV[p.mouv] || MOUV.avance;
+  if (p.mouv === 'glisse' && k % 2) m = { s: m.s, x: m.x.slice().reverse(), y: m.y, nom: m.nom };
   mouvP = { m: m, duree: (duree || p.duree) * 1000, el: el, t: 0 };
   if (leger || !el.animate) { animP = null; el.style.transform = transfo(m, 0); }
   else { el.style.transform = ''; animP = el.animate([{ transform: transfo(m, 0) }, { transform: transfo(m, 1) }], { duration: mouvP.duree, fill: 'both', easing: 'ease-in-out' }); }
